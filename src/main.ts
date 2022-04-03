@@ -53,7 +53,55 @@ import {
   polarisGetRuns, polarisIsInDiff
 } from "@jcroall/synopsys-sig-node/lib/polaris/service/PolarisAPI";
 import {IPolarisIssueUnified} from "@jcroall/synopsys-sig-node/lib/polaris/model/PolarisAPI";
+import {context} from "@actions/github";
+import * as core from '@actions/core'
+import {Octokit} from "@octokit/rest";
 
+export async function githubGetChangesForPR(github_token: string): Promise<Array<string>> {
+  let changed_files: string[] = []
+
+  const octokit = new Octokit({ auth: github_token })
+
+  let base = context.payload.pull_request?.base?.sha
+  let head = context.payload.pull_request?.head?.sha
+
+  logger.debug(`Get changes for Pull Request based on base commit: ${base} and head commit: ${head}`)
+
+  const response = await octokit.repos.compareCommits({
+    base,
+    head,
+    owner: context.repo.owner,
+    repo: context.repo.repo
+  })
+
+  if (response.status !== 200) {
+    logger.error(`The GitHub API for comparing the base and head commits for this ${context.eventName} event returned ${response.status}, expected 200.`)
+    return(changed_files)
+  }
+
+  const files = response.data.files
+  if (files) {
+    for (const file of files) {
+      switch (file.status) {
+        case 'added':
+          logger.debug(`Change set added file: ${file.filename}`)
+          changed_files.push(file.filename)
+          break
+        case 'modified':
+          logger.debug(`Change set modified file: ${file.filename}`)
+          changed_files.push(file.filename)
+          break
+        case 'renamed':
+          logger.debug(`Change set renamed file: ${file.filename}`)
+          changed_files.push(file.filename)
+          break
+      }
+    }
+  }
+
+  return (changed_files)
+}
+/*
 const github = require('@actions/github');
 const core   = require('@actions/core');
 
@@ -97,6 +145,7 @@ export async function githubGetChangesForMR(github_token: string): Promise<Array
   return(changed_files)
 }
 
+ */
 async function run(): Promise<void> {
   logger.info('Starting Coverity GitHub Action')
 
@@ -157,7 +206,7 @@ async function run(): Promise<void> {
     var actual_build_command = POLARIS_COMMAND
     if (githubIsPullRequest() && task_input.should_populate_changeset) {
       logger.debug("Populating change set for Polaris Software Integrity Platform.");
-      const changed_files = await githubGetChangesForMR(GITHUB_TOKEN)
+      const changed_files = await githubGetChangesForPR(GITHUB_TOKEN)
       for (const file in changed_files) {
         logger.debug(`Found changed file: ${file}`)
       }
