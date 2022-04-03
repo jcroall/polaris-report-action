@@ -53,12 +53,10 @@ const context = github.context;
 const repo    = context.payload.repository;
 const owner   = repo.owner;
 
-const gh   = github.getOctokit(core.getInput('token'));
+const gh   = github.getOctokit(GITHUB_TOKEN);
 const args = { owner: owner.name || owner.login, repo: repo.name, ref: undefined };
 
-
 export async function githubGetChangesForMR(github_token: string): Promise<Array<string>> {
-  const gh = github.getOctokit(GITHUB_TOKEN)
   let changed_files: string[] = []
 
   if (githubIsPullRequest()) {
