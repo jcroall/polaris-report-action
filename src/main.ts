@@ -76,6 +76,7 @@ export async function githubGetChangesForMR(github_token: string): Promise<Array
       let commits = await gh.paginate(`GET ${url}`, args);
       logger.debug(`Get commits from ${url}: ${commits}`)
       for (const commit of commits) {
+        logger.debug(`  commit=${commit.id} or ${commit.sha}`)
         args.ref = commit.id || commit.sha
         let commit_data = gh.repos.getCommit(args)
         logger.debug(`Found file in PR: ${commit_data.file.filename}`)
