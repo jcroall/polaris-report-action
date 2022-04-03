@@ -1,37 +1,211 @@
 import fs from 'fs'
-import {createIssueComment, createReview, getExistingIssueComments, getExistingReviewComments, getPullRequestDiff, updateExistingIssueComment, updateExistingReviewComment} from './github/pull-request'
-import {CoverityIssuesView, IssueOccurrence} from './json-v7-schema'
-import {COMMENT_PREFACE, createReviewCommentMessage, createIssueCommentMessage, DiffMap, getDiffMap, createNoLongerPresentMessage, isPresent} from './reporting'
-import {isPullRequest, relativizePath} from './github/github-context'
-import {COVERITY_PASSWORD, COVERITY_PROJECT_NAME, COVERITY_URL, COVERITY_USERNAME, JSON_FILE_PATH} from './inputs'
 import {info, setFailed, warning} from '@actions/core'
-import {NewReviewComment} from './_namespaces/github'
-import {mapMatchingMergeKeys, ProjectIssue} from './issue-mapper'
+import {
+  COVERITY_COMMENT_PREFACE,
+  coverityCreateIssueCommentMessage,
+  coverityCreateNoLongerPresentMessage,
+  coverityCreateReviewCommentMessage,
+  coverityIsPresent,
+  CoverityIssueOccurrence,
+  CoverityProjectIssue,
+  DiffMap,
+  githubCreateIssueComment,
+  githubCreateReview,
+  githubGetDiffMap,
+  githubGetExistingIssueComments,
+  githubGetExistingReviewComments,
+  githubGetPullRequestDiff,
+  githubIsPullRequest,
+  githubRelativizePath,
+  githubUpdateExistingIssueComment,
+  githubUpdateExistingReviewComment,
+  coverityMapMatchingMergeKeys,
+  relatavize_path,
+  logger
+} from '@jcroall/synopsys-sig-node/lib'
+import {CoverityIssuesView} from '@jcroall/synopsys-sig-node/lib/models/coverity-json-v7-schema'
+import {NewReviewComment, PullRequest} from '@jcroall/synopsys-sig-node/lib/_namespaces/github'
+import {
+  DEBUG, GITHUB_TOKEN,
+  POLARIS_ACCESS_TOKEN, POLARIS_COMMAND,
+  POLARIS_PROXY_PASSWORD,
+  POLARIS_PROXY_URL,
+  POLARIS_PROXY_USERNAME,
+  POLARIS_URL, SKIP_RUN
+} from "./inputs";
+import os from "os";
+import {PolarisTaskInputs} from "@jcroall/synopsys-sig-node/lib/polaris/model/PolarisTaskInput";
+import PolarisInputReader from "@jcroall/synopsys-sig-node/lib/polaris/input/PolarisInputReader";
+import PolarisConnection from "@jcroall/synopsys-sig-node/lib/polaris/model/PolarisConnection";
+import PolarisService from "@jcroall/synopsys-sig-node/lib/polaris/service/PolarisService";
+import ChangeSetEnvironment from "@jcroall/synopsys-sig-node/lib/polaris/changeset/ChangeSetEnvironment";
+import ChangeSetFileWriter from "@jcroall/synopsys-sig-node/lib/polaris/changeset/ChangeSetFileWriter";
+import ChangeSetReplacement from "@jcroall/synopsys-sig-node/lib/polaris/changeset/ChangeSetReplacement";
+import PolarisInstaller from "@jcroall/synopsys-sig-node/lib/polaris/cli/PolarisInstaller";
+import PolarisInstall from "@jcroall/synopsys-sig-node/lib/polaris/model/PolarisInstall";
+import PolarisRunner from "@jcroall/synopsys-sig-node/lib/polaris/cli/PolarisRunner";
+import PolarisIssueWaiter from "@jcroall/synopsys-sig-node/lib/polaris/util/PolarisIssueWaiter";
+
+const github = require('@actions/github');
+const core   = require('@actions/core');
+
+const context = github.context;
+const repo    = context.payload.repository;
+const owner   = repo.owner;
+
+const gh   = github.getOctokit(core.getInput('token'));
+const args = { owner: owner.name || owner.login, repo: repo.name, ref: undefined };
+
+
+export async function githubGetChangesForMR(github_token: string): Promise<Array<string>> {
+  const gh = github.getOctokit(core.getInput(github_token))
+  let changed_files: string[] = []
+
+  if (githubIsPullRequest()) {
+    logger.debug(`GitHub Get Changed Files - operating on a pull request`)
+
+    const pull = context.payload.pull_request as PullRequest
+    if (pull?.number) {
+      let pr_number = pull.number
+      process.exit(1)
+    }
+  } else {
+    logger.debug(`GitHub Get Changed Files - operating on a push`)
+    let commits = context.payload.commits
+    for (const commit of commits) {
+      args.ref = commit.id || commit.sha
+      let commit_data = gh.repos.getCommit(args)
+      logger.debug(`Found file in push: ${commit_data.file.filename}`)
+      changed_files.push(commit_data.file.filename)
+    }
+  }
+
+  return(changed_files)
+}
 
 async function run(): Promise<void> {
-  if (!isPullRequest()) {
-    info('Not a Pull Request. Nothing to do...')
+  logger.info('Starting Coverity GitHub Action')
+
+  if (DEBUG) {
+    logger.level = 'debug'
+    logger.debug(`Enabled debug mode`)
+  }
+
+  logger.info(`Connecting to Polaris service at: ${POLARIS_URL}`)
+
+  const task_input: PolarisTaskInputs = new PolarisInputReader().getPolarisInputs(POLARIS_URL, POLARIS_ACCESS_TOKEN,
+      POLARIS_PROXY_URL ? POLARIS_PROXY_URL : "",
+      POLARIS_PROXY_USERNAME ? POLARIS_PROXY_USERNAME : "",
+      POLARIS_PROXY_PASSWORD ? POLARIS_PROXY_PASSWORD : "",
+      POLARIS_COMMAND, true, true, false)
+  const connection: PolarisConnection = task_input.polaris_connection;
+
+  var polaris_install_path: string | undefined;
+  polaris_install_path = os.tmpdir()
+  if (!polaris_install_path) {
+    logger.warn("Agent did not have a tool directory, polaris will be installed to the current working directory.");
+    polaris_install_path = process.cwd();
+  }
+  logger.info(`Polaris Software Integrity Platform will be installed to the following path: ` + polaris_install_path);
+
+  logger.info("Connecting to Polaris Software Integrity Platform server.")
+  const polaris_service = new PolarisService(logger, connection);
+  await polaris_service.authenticate();
+  logger.debug("Authenticated with polaris.");
+
+  try {
+    logger.debug("Fetching organization name and task version.");
+    const org_name = await polaris_service.fetch_organization_name();
+    logger.debug(`Organization name: ${org_name}`)
+    /*
+    const task_version = PhoneHomeService.FindTaskVersion();
+
+    logger.debug("Starting phone home.");
+    const phone_home_service = PhoneHomeService.CreateClient(log);
+    await phone_home_service.phone_home(connection.url, task_version, org_name);
+    logger.debug("Phoned home.");
+     */
+  } catch (e){
+    /*
+    logger.debug("Unable to phone home.");
+     */
+  }
+
+  let polaris_run_result = undefined
+
+  if (SKIP_RUN) {
+    polaris_run_result = {
+      scan_cli_json_path: ".synopsys/polaris/cli-scan.json",
+      return_code: 0
+    }
+  } else {
+    //If there are no changes, we can potentially bail early, so we do that first.
+    var actual_build_command = POLARIS_COMMAND
+    if (githubIsPullRequest() && task_input.should_populate_changeset) {
+      logger.debug("Populating change set for Polaris Software Integrity Platform.");
+      const changed_files = await githubGetChangesForMR(GITHUB_TOKEN)
+      for (const file in changed_files) {
+        logger.debug(`Found changed file: ${file}`)
+      }
+      if (changed_files.length == 0 && task_input.should_empty_changeset_fail) {
+        logger.error(` Task failed: No changed files were found.`)
+        return;
+      } else if (changed_files.length == 0) {
+        logger.info("Task finished: No changed files were found.")
+        return;
+      }
+      const change_set_environment = new ChangeSetEnvironment(logger, process.env);
+      const change_file = change_set_environment.get_or_create_file_path(process.cwd());
+      change_set_environment.set_enable_incremental();
+
+      await new ChangeSetFileWriter(logger).write_change_set_file(change_file, changed_files);
+      actual_build_command = new ChangeSetReplacement().replace_build_command(actual_build_command, change_file);
+    }
+
+    logger.info("Installing Polaris Software Integrity Platform.");
+    var polaris_installer = PolarisInstaller.default_installer(logger, polaris_service);
+    var polaris_install: PolarisInstall = await polaris_installer.install_or_locate_polaris(connection.url, polaris_install_path);
+    logger.info("Found Polaris Software Integrity Platform: " + polaris_install.polaris_executable);
+
+    logger.info("Running Polaris Software Integrity Platform.");
+    var polaris_runner = new PolarisRunner(logger);
+    polaris_run_result = await polaris_runner.execute_cli(connection, polaris_install, process.cwd(), actual_build_command);
+
+    if (task_input.should_wait_for_issues) {
+      logger.info("Checking for issues.")
+      var polaris_waiter = new PolarisIssueWaiter(logger);
+      var issue_count = await polaris_waiter.wait_for_issues(polaris_run_result.scan_cli_json_path, polaris_service);
+      // Ignore, we will calculate issues separately
+      // logger.error(`Polaris Software Integrity Platform found ${issue_count} total issues.`)
+    } else {
+      logger.info("Will not check for issues.")
+    }
+  }
+
+  if (!githubIsPullRequest()) {
+    logger.info('Not a Pull Request. Nothing to do...')
     return Promise.resolve()
   }
 
-  info(`Using JSON file path: ${JSON_FILE_PATH}`)
+  /*
+  logger.info(`Using JSON file path: ${JSON_FILE_PATH}`)
 
   // TODO validate file exists and is .json?
   const jsonV7Content = fs.readFileSync(JSON_FILE_PATH)
   const coverityIssues = JSON.parse(jsonV7Content.toString()) as CoverityIssuesView
 
-  let mergeKeyToIssue = new Map<string, ProjectIssue>()
+  let mergeKeyToIssue = new Map<string, CoverityProjectIssue>()
 
   const canCheckCoverity = COVERITY_URL && COVERITY_USERNAME && COVERITY_PASSWORD && COVERITY_PROJECT_NAME
   if (!canCheckCoverity) {
-    warning('Missing Coverity Connect info. Issues will not be checked against the server.')
+    logger.warning('Missing Coverity Connect info. Issues will not be checked against the server.')
   } else {
     const allMergeKeys = coverityIssues.issues.map(issue => issue.mergeKey)
     const allUniqueMergeKeys = new Set<string>(allMergeKeys)
 
     if (canCheckCoverity && coverityIssues && coverityIssues.issues.length > 0) {
       try {
-        mergeKeyToIssue = await mapMatchingMergeKeys(allUniqueMergeKeys)
+        mergeKeyToIssue = await coverityMapMatchingMergeKeys(COVERITY_URL, COVERITY_USERNAME, COVERITY_PASSWORD, COVERITY_PROJECT_NAME, allUniqueMergeKeys)
       } catch (error: any) {
         setFailed(error as string | Error)
         return Promise.reject()
@@ -40,12 +214,12 @@ async function run(): Promise<void> {
   }
 
   const newReviewComments = []
-  const actionReviewComments = await getExistingReviewComments().then(comments => comments.filter(comment => comment.body.includes(COMMENT_PREFACE)))
-  const actionIssueComments = await getExistingIssueComments().then(comments => comments.filter(comment => comment.body?.includes(COMMENT_PREFACE)))
-  const diffMap = await getPullRequestDiff().then(getDiffMap)
+  const actionReviewComments = await githubGetExistingReviewComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body.includes(COVERITY_COMMENT_PREFACE)))
+  const actionIssueComments = await githubGetExistingIssueComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body?.includes(COVERITY_COMMENT_PREFACE)))
+  const diffMap = await githubGetPullRequestDiff(GITHUB_TOKEN).then(githubGetDiffMap)
 
   for (const issue of coverityIssues.issues) {
-    info(`Found Coverity Issue ${issue.mergeKey} at ${issue.mainEventFilePathname}:${issue.mainEventLineNumber}`)
+    logger.info(`Found Coverity Issue ${issue.mergeKey} at ${issue.mainEventFilePathname}:${issue.mainEventLineNumber}`)
 
     const projectIssue = mergeKeyToIssue.get(issue.mergeKey)
     let ignoredOnServer = false
@@ -53,11 +227,17 @@ async function run(): Promise<void> {
     if (projectIssue) {
       ignoredOnServer = projectIssue.action == 'Ignore' || projectIssue.classification in ['False Positive', 'Intentional']
       newOnServer = projectIssue.firstSnapshotId == projectIssue.lastSnapshotId
-      info(`Issue state on server: ignored=${ignoredOnServer}, new=${newOnServer}`)
+      logger.info(`Issue state on server: ignored=${ignoredOnServer}, new=${newOnServer}`)
     }
 
-    const reviewCommentBody = createReviewCommentMessage(issue)
-    const issueCommentBody = createIssueCommentMessage(issue)
+    const reviewCommentBody = coverityCreateReviewCommentMessage(issue)
+
+    let relativePath = issue.strippedMainEventFilePathname.startsWith('/') ?
+        relatavize_path(process.cwd(), issue.strippedMainEventFilePathname) :
+        issue.strippedMainEventFilePathname
+
+    let file_link = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/blob/${process.env.GITHUB_SHA}/${relativePath}#L${issue.mainEventLineNumber}`
+    const issueCommentBody = coverityCreateIssueCommentMessage(issue, file_link)
 
     const reviewCommentIndex = actionReviewComments.findIndex(comment => comment.line === issue.mainEventLineNumber && comment.body.includes(issue.mergeKey))
     let existingMatchingReviewComment = undefined
@@ -72,51 +252,53 @@ async function run(): Promise<void> {
     }
 
     if (existingMatchingReviewComment !== undefined) {
-      info(`Issue already reported in comment ${existingMatchingReviewComment.id}, updating if necessary...`)
+      logger.info(`Issue already reported in comment ${existingMatchingReviewComment.id}, updating if necessary...`)
       if (existingMatchingReviewComment.body !== reviewCommentBody) {
-        updateExistingReviewComment(existingMatchingReviewComment.id, reviewCommentBody)
+        githubUpdateExistingReviewComment(GITHUB_TOKEN, existingMatchingReviewComment.id, reviewCommentBody)
       }
     } else if (existingMatchingIssueComment !== undefined) {
-      info(`Issue already reported in comment ${existingMatchingIssueComment.id}, updating if necessary...`)
+      logger.info(`Issue already reported in comment ${existingMatchingIssueComment.id}, updating if necessary...`)
       if (existingMatchingIssueComment.body !== issueCommentBody) {
-        updateExistingIssueComment(existingMatchingIssueComment.id, issueCommentBody)
+        githubUpdateExistingIssueComment(GITHUB_TOKEN, existingMatchingIssueComment.id, issueCommentBody)
       }
     } else if (ignoredOnServer) {
-      info('Issue ignored on server, no comment needed.')
+      logger.info('Issue ignored on server, no comment needed.')
     } else if (!newOnServer) {
-      info('Issue already existed on server, no comment needed.')
+      logger.info('Issue already existed on server, no comment needed.')
     } else if (isInDiff(issue, diffMap)) {
-      info('Issue not reported, adding a comment to the review.')
+      logger.info('Issue not reported, adding a comment to the review.')
       newReviewComments.push(createReviewComment(issue, reviewCommentBody))
     } else {
-      info('Issue not reported, adding an issue comment.')
-      createIssueComment(issueCommentBody)
+      logger.info('Issue not reported, adding an issue comment.')
+      githubCreateIssueComment(GITHUB_TOKEN, issueCommentBody)
     }
   }
 
   for (const comment of actionReviewComments) {
-    if (isPresent(comment.body)) {
+    if (coverityIsPresent(comment.body)) {
       info(`Comment ${comment.id} represents a Coverity issue which is no longer present, updating comment to reflect resolution.`)
-      updateExistingReviewComment(comment.id, createNoLongerPresentMessage(comment.body))
+      githubUpdateExistingReviewComment(GITHUB_TOKEN, comment.id, coverityCreateNoLongerPresentMessage(comment.body))
     }
   }
 
   for (const comment of actionIssueComments) {
-    if (comment.body !== undefined && isPresent(comment.body)) {
+    if (comment.body !== undefined && coverityIsPresent(comment.body)) {
       info(`Comment ${comment.id} represents a Coverity issue which is no longer present, updating comment to reflect resolution.`)
-      updateExistingReviewComment(comment.id, createNoLongerPresentMessage(comment.body))
+      githubUpdateExistingReviewComment(GITHUB_TOKEN, comment.id, coverityCreateNoLongerPresentMessage(comment.body))
     }
   }
 
   if (newReviewComments.length > 0) {
     info('Publishing review...')
-    createReview(newReviewComments)
+    githubCreateReview(GITHUB_TOKEN, newReviewComments)
   }
 
   info(`Found ${coverityIssues.issues.length} Coverity issues.`)
+
+   */
 }
 
-function isInDiff(issue: IssueOccurrence, diffMap: DiffMap): boolean {
+function isInDiff(issue: CoverityIssueOccurrence, diffMap: DiffMap): boolean {
   const diffHunks = diffMap.get(issue.mainEventFilePathname)
 
   if (!diffHunks) {
@@ -126,9 +308,9 @@ function isInDiff(issue: IssueOccurrence, diffMap: DiffMap): boolean {
   return diffHunks.filter(hunk => hunk.firstLine <= issue.mainEventLineNumber).some(hunk => issue.mainEventLineNumber <= hunk.lastLine)
 }
 
-function createReviewComment(issue: IssueOccurrence, commentBody: string): NewReviewComment {
+function createReviewComment(issue: CoverityIssueOccurrence, commentBody: string): NewReviewComment {
   return {
-    path: relativizePath(issue.mainEventFilePathname),
+    path: githubRelativizePath(issue.mainEventFilePathname),
     body: commentBody,
     line: issue.mainEventLineNumber,
     side: 'RIGHT'

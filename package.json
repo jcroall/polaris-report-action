@@ -1,8 +1,8 @@
 {
-  "name": "coverity-report-output-v7-json",
-  "version": "0.0.2-SNAPSHOT",
+  "name": "polaris-report-action",
+  "version": "0.1.0",
   "private": true,
-  "description": "Parse Coverity json-output-v7 and report on the results within GitHub",
+  "description": "Execute Polaris security testing and provide feedback within GitHub",
   "main": "lib/main.js",
   "scripts": {
     "build": "tsc",
@@ -19,20 +19,20 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/synopsys-sig/coverity-report-output-v7-json.git"
+    "url": "git+https://github.com/jcroall/polaris-report-action.git"
   },
   "keywords": [],
   "author": "Synopsys Inc.",
   "license": "Apache 2.0",
   "bugs": {
-    "url": "https://github.com/synopsys-sig/coverity-report-output-v7-json/issues"
+    "url": "https://github.com/jcroall/polaris-report-action/issues"
   },
-  "homepage": "https://github.com/synopsys-sig/coverity-report-output-v7-json#readme",
+  "homepage": "https://github.com/jcroall/polaris-report-action#readme",
   "dependencies": {
     "@actions/artifact": "^0.6.1",
     "@actions/core": "^1.6.0",
     "@actions/github": "^5.0.0",
-    "@jcroall/synopsys-sig-node": "^1.0.22",
+    "@jcroall/synopsys-sig-node": "^1.1.50",
     "@octokit/rest": "^18.12.0",
     "typed-rest-client": "^1.8.6"
   },
