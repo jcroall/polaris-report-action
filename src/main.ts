@@ -203,7 +203,7 @@ async function run(): Promise<void> {
     }
   } else {
     //If there are no changes, we can potentially bail early, so we do that first.
-    var actual_build_command = POLARIS_COMMAND
+    var actual_build_command = `--co scm.git.branch=${process.env.GITHUB_REF_NAME} ${POLARIS_COMMAND}`
     if (githubIsPullRequest() && task_input.should_populate_changeset) {
       logger.debug("Populating change set for Polaris Software Integrity Platform.");
       const changed_files = await githubGetChangesForPR(GITHUB_TOKEN)
