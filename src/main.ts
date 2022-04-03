@@ -45,6 +45,14 @@ import PolarisInstaller from "@jcroall/synopsys-sig-node/lib/polaris/cli/Polaris
 import PolarisInstall from "@jcroall/synopsys-sig-node/lib/polaris/model/PolarisInstall";
 import PolarisRunner from "@jcroall/synopsys-sig-node/lib/polaris/cli/PolarisRunner";
 import PolarisIssueWaiter from "@jcroall/synopsys-sig-node/lib/polaris/util/PolarisIssueWaiter";
+import {
+  POLARIS_COMMENT_PREFACE,
+  polarisCreateReviewCommentMessage,
+  polarisGetBranches,
+  polarisGetIssuesUnified,
+  polarisGetRuns, polarisIsInDiff
+} from "@jcroall/synopsys-sig-node/lib/polaris/service/PolarisAPI";
+import {IPolarisIssueUnified} from "@jcroall/synopsys-sig-node/lib/polaris/model/PolarisAPI";
 
 const github = require('@actions/github');
 const core   = require('@actions/core');
@@ -64,8 +72,14 @@ export async function githubGetChangesForMR(github_token: string): Promise<Array
 
     const pull = context.payload.pull_request as PullRequest
     if (pull?.number) {
-      let pr_number = pull.number
-      process.exit(1)
+      const url = context.payload.pull_request.commits_url;
+      let commits = await gh.paginate(`GET ${url}`, args);
+      for (const commit of commits) {
+        args.ref = commit.id || commit.sha
+        let commit_data = gh.repos.getCommit(args)
+        logger.debug(`Found file in PR: ${commit_data.file.filename}`)
+        changed_files.push(commit_data.file.filename)
+      }
     }
   } else {
     logger.debug(`GitHub Get Changed Files - operating on a push`)
@@ -180,70 +194,90 @@ async function run(): Promise<void> {
     }
   }
 
+  if (!polaris_run_result) {
+    logger.error(`Unable to find Polaris run results.`)
+    process.exit(2)
+  }
+
+  var scan_json_text = fs.readFileSync(polaris_run_result.scan_cli_json_path);
+  var scan_json = JSON.parse(scan_json_text.toString());
+
+  const json_path = require('jsonpath');
+  var project_id = json_path.query(scan_json, "$.projectInfo.projectId")
+  var branch_id = json_path.query(scan_json, "$.projectInfo.branchId")
+  var revision_id = json_path.query(scan_json, "$.projectInfo.revisionId")
+
+  logger.debug(`Connect to Polaris: ${polaris_service.polaris_url} and fetch issues for project: ${project_id} and branch: ${branch_id}`)
+
+  let runs = await polarisGetRuns(polaris_service, project_id, branch_id)
+
+  if (runs.length > 1) {
+    logger.debug(`Most recent run is: ${runs[0].id} was created on ${runs[0].attributes["creation-date"]}`)
+    logger.debug(`Last run is: ${runs[1].id} was created on ${runs[1].attributes["creation-date"]}`)
+    logger.debug(`...`)
+  }
+
+  let branches = await polarisGetBranches(polaris_service, project_id)
+  let merge_target_branch = process.env["CI_MERGE_REQUEST_TARGET_BRANCH_NAME"]
+
+  let issuesUnified = undefined
+
+  if (githubIsPullRequest()) {
+    let branches = await polarisGetBranches(polaris_service, project_id)
+    let branch_id_compare = undefined
+    for (const branch of branches) {
+      if (branch.attributes.name == merge_target_branch) {
+        logger.debug(`Running on merge request, and target branch is '${merge_target_branch}' which has Polaris ID ${branch.id}`)
+        branch_id_compare = branch.id
+      }
+    }
+
+    if (!branch_id_compare) {
+      logger.error(`Running on merge request and unable to find previous Polaris analysis for merge target: ${merge_target_branch}, will fall back to full results`)
+    } else {
+      issuesUnified = await polarisGetIssuesUnified(polaris_service, project_id, branch_id,
+          true, runs[0].id, false, branch_id_compare, "", "opened")
+    }
+  }
+
+  if (!issuesUnified) {
+    logger.debug(`No merge request or merge comparison available, fetching full results`)
+    issuesUnified = await polarisGetIssuesUnified(polaris_service, project_id, branch_id,
+        true, "", false, "", "", "")
+  }
+
+  logger.info("Executed Polaris Software Integrity Platform: " + polaris_run_result.return_code);
+
+  // TODO If SARIF
+
   if (!githubIsPullRequest()) {
     logger.info('Not a Pull Request. Nothing to do...')
     return Promise.resolve()
   }
 
-  /*
-  logger.info(`Using JSON file path: ${JSON_FILE_PATH}`)
 
-  // TODO validate file exists and is .json?
-  const jsonV7Content = fs.readFileSync(JSON_FILE_PATH)
-  const coverityIssues = JSON.parse(jsonV7Content.toString()) as CoverityIssuesView
-
-  let mergeKeyToIssue = new Map<string, CoverityProjectIssue>()
-
-  const canCheckCoverity = COVERITY_URL && COVERITY_USERNAME && COVERITY_PASSWORD && COVERITY_PROJECT_NAME
-  if (!canCheckCoverity) {
-    logger.warning('Missing Coverity Connect info. Issues will not be checked against the server.')
-  } else {
-    const allMergeKeys = coverityIssues.issues.map(issue => issue.mergeKey)
-    const allUniqueMergeKeys = new Set<string>(allMergeKeys)
-
-    if (canCheckCoverity && coverityIssues && coverityIssues.issues.length > 0) {
-      try {
-        mergeKeyToIssue = await coverityMapMatchingMergeKeys(COVERITY_URL, COVERITY_USERNAME, COVERITY_PASSWORD, COVERITY_PROJECT_NAME, allUniqueMergeKeys)
-      } catch (error: any) {
-        setFailed(error as string | Error)
-        return Promise.reject()
-      }
-    }
-  }
 
   const newReviewComments = []
-  const actionReviewComments = await githubGetExistingReviewComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body.includes(COVERITY_COMMENT_PREFACE)))
-  const actionIssueComments = await githubGetExistingIssueComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body?.includes(COVERITY_COMMENT_PREFACE)))
+  const actionReviewComments = await githubGetExistingReviewComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body.includes(POLARIS_COMMENT_PREFACE)))
+  const actionIssueComments = await githubGetExistingIssueComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body?.includes(POLARIS_COMMENT_PREFACE)))
   const diffMap = await githubGetPullRequestDiff(GITHUB_TOKEN).then(githubGetDiffMap)
 
-  for (const issue of coverityIssues.issues) {
-    logger.info(`Found Coverity Issue ${issue.mergeKey} at ${issue.mainEventFilePathname}:${issue.mainEventLineNumber}`)
+  for (const issue of issuesUnified) {
+    logger.info(`Found Polaris Issue ${issue.key} at ${issue.path}:${issue.line}`)
 
-    const projectIssue = mergeKeyToIssue.get(issue.mergeKey)
-    let ignoredOnServer = false
-    let newOnServer = true
-    if (projectIssue) {
-      ignoredOnServer = projectIssue.action == 'Ignore' || projectIssue.classification in ['False Positive', 'Intentional']
-      newOnServer = projectIssue.firstSnapshotId == projectIssue.lastSnapshotId
-      logger.info(`Issue state on server: ignored=${ignoredOnServer}, new=${newOnServer}`)
-    }
+    let ignoredOnServer = issue.dismissed
 
-    const reviewCommentBody = coverityCreateReviewCommentMessage(issue)
+    const reviewCommentBody = polarisCreateReviewCommentMessage(issue)
+    const issueCommentBody = polarisCreateReviewCommentMessage(issue)
 
-    let relativePath = issue.strippedMainEventFilePathname.startsWith('/') ?
-        relatavize_path(process.cwd(), issue.strippedMainEventFilePathname) :
-        issue.strippedMainEventFilePathname
-
-    let file_link = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/blob/${process.env.GITHUB_SHA}/${relativePath}#L${issue.mainEventLineNumber}`
-    const issueCommentBody = coverityCreateIssueCommentMessage(issue, file_link)
-
-    const reviewCommentIndex = actionReviewComments.findIndex(comment => comment.line === issue.mainEventLineNumber && comment.body.includes(issue.mergeKey))
+    const reviewCommentIndex = actionReviewComments.findIndex(comment => comment.line === issue.line &&
+        comment.body.includes(issue.key))
     let existingMatchingReviewComment = undefined
     if (reviewCommentIndex !== -1) {
       existingMatchingReviewComment = actionReviewComments.splice(reviewCommentIndex, 1)[0]
     }
 
-    const issueCommentIndex = actionIssueComments.findIndex(comment => comment.body?.includes(issue.mergeKey))
+    const issueCommentIndex = actionIssueComments.findIndex(comment => comment.body?.includes(issue.key))
     let existingMatchingIssueComment = undefined
     if (issueCommentIndex !== -1) {
       existingMatchingIssueComment = actionIssueComments.splice(issueCommentIndex, 1)[0]
@@ -261,9 +295,7 @@ async function run(): Promise<void> {
       }
     } else if (ignoredOnServer) {
       logger.info('Issue ignored on server, no comment needed.')
-    } else if (!newOnServer) {
-      logger.info('Issue already existed on server, no comment needed.')
-    } else if (isInDiff(issue, diffMap)) {
+    } else if (polarisIsInDiff(issue, diffMap)) {
       logger.info('Issue not reported, adding a comment to the review.')
       newReviewComments.push(createReviewComment(issue, reviewCommentBody))
     } else {
@@ -291,9 +323,8 @@ async function run(): Promise<void> {
     githubCreateReview(GITHUB_TOKEN, newReviewComments)
   }
 
-  info(`Found ${coverityIssues.issues.length} Coverity issues.`)
+  info(`Found ${issuesUnified.length} Reported Polaris issues.`)
 
-   */
 }
 
 function isInDiff(issue: CoverityIssueOccurrence, diffMap: DiffMap): boolean {
@@ -306,11 +337,11 @@ function isInDiff(issue: CoverityIssueOccurrence, diffMap: DiffMap): boolean {
   return diffHunks.filter(hunk => hunk.firstLine <= issue.mainEventLineNumber).some(hunk => issue.mainEventLineNumber <= hunk.lastLine)
 }
 
-function createReviewComment(issue: CoverityIssueOccurrence, commentBody: string): NewReviewComment {
+function createReviewComment(issue: IPolarisIssueUnified, commentBody: string): NewReviewComment {
   return {
-    path: githubRelativizePath(issue.mainEventFilePathname),
+    path: githubRelativizePath(issue.path),
     body: commentBody,
-    line: issue.mainEventLineNumber,
+    line: issue.line,
     side: 'RIGHT'
   }
 }

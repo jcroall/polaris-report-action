@@ -32,6 +32,9 @@ inputs:
   polaris-proxy-password:
     description: 'The password for the proxy'
     required: true
+  generate-sarif:
+    description: 'Generate SARIF output'
+    required: false
   skip-run:
     description: 'Skip execution of the Polaris CLI command, assume it has been run manually'
     required: false
