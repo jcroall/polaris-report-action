@@ -74,6 +74,7 @@ export async function githubGetChangesForMR(github_token: string): Promise<Array
     if (pull?.number) {
       const url = context.payload.pull_request.commits_url;
       let commits = await gh.paginate(`GET ${url}`, args);
+      logger.debug(`Get commits from ${url}: ${commits}`)
       for (const commit of commits) {
         args.ref = commit.id || commit.sha
         let commit_data = gh.repos.getCommit(args)
