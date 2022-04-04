@@ -296,7 +296,7 @@ async function run(): Promise<void> {
   if (!issuesUnified) {
     logger.debug(`No merge request or merge comparison available, fetching full results`)
     issuesUnified = await polarisGetIssuesUnified(polaris_service, project_id, branch_id,
-        true, "", false, "", "", "")
+        true, runs[0].id, false, "", "", "")
   }
 
   logger.info("Executed Polaris Software Integrity Platform: " + polaris_run_result.return_code);
