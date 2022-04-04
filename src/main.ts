@@ -113,9 +113,9 @@ async function run(): Promise<void> {
   logger.info(`Connecting to Polaris service at: ${POLARIS_URL}`)
 
   let securityGateFilters = undefined
-  if (process.env.SECURITY_GATE_FILTER) {
+  if (SECURITY_GATE_FILTERS) {
     try {
-      securityGateFilters = readSecurityGateFiltersFromString(process.env.SECURITY_GATE_FILTER)
+      securityGateFilters = readSecurityGateFiltersFromString(SECURITY_GATE_FILTERS)
     } catch (error) {
       logger.error(`Unable to parse security gate filters: ${error}`)
       process.exit(2)
