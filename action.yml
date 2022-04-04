@@ -35,6 +35,9 @@ inputs:
   generate-sarif:
     description: 'Generate SARIF output'
     required: false
+  security-gate-filyers:
+    description: 'Enable security gate'
+    required: false
   skip-run:
     description: 'Skip execution of the Polaris CLI command, assume it has been run manually'
     required: false

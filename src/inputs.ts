@@ -10,5 +10,6 @@ export const POLARIS_PROXY_URL = getInput('polaris-proxy-url')
 export const POLARIS_PROXY_USERNAME = getInput('polaris-proxy-username')
 export const POLARIS_PROXY_PASSWORD = getInput('polaris-proxy-password')
 export const GENERATE_SARIF = getInput('generate-sarif')
+export const SECURITY_GATE_FILTERS = getInput('security-gate-filters')
 export const SKIP_RUN = getInput('skip-run')
 

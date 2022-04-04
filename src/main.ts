@@ -31,7 +31,7 @@ import {
   POLARIS_PROXY_PASSWORD,
   POLARIS_PROXY_URL,
   POLARIS_PROXY_USERNAME,
-  POLARIS_URL, SKIP_RUN
+  POLARIS_URL, SECURITY_GATE_FILTERS, SKIP_RUN
 } from "./inputs";
 import os from "os";
 import {PolarisTaskInputs} from "@jcroall/synopsys-sig-node/lib/polaris/model/PolarisTaskInput";
@@ -56,6 +56,23 @@ import {IPolarisIssueUnified} from "@jcroall/synopsys-sig-node/lib/polaris/model
 import {context} from "@actions/github";
 import * as core from '@actions/core'
 import {Octokit} from "@octokit/rest";
+
+function readSecurityGateFiltersFromString(securityGateString: string): Map<string, string[]> {
+  const securityGateJson = JSON.parse(securityGateString)
+  let securityGateMap = new Map<string, string[]>()
+
+  logger.debug(`Reading security gate filters`)
+
+  for (const key in securityGateJson) {
+    if(Object.hasOwnProperty(key)) {
+      logger.debug(`  ${key} : ${securityGateJson[key]}`)
+    }
+  }
+
+  process.exit(1)
+
+  return(securityGateMap)
+}
 
 export async function githubGetChangesForPR(github_token: string): Promise<Array<string>> {
   let changed_files: string[] = []
@@ -155,6 +172,8 @@ async function run(): Promise<void> {
   }
 
   logger.info(`Connecting to Polaris service at: ${POLARIS_URL}`)
+
+  readSecurityGateFiltersFromString(SECURITY_GATE_FILTERS)
 
   const task_input: PolarisTaskInputs = new PolarisInputReader().getPolarisInputs(POLARIS_URL, POLARIS_ACCESS_TOKEN,
       POLARIS_PROXY_URL ? POLARIS_PROXY_URL : "",
