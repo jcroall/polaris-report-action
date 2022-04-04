@@ -392,7 +392,7 @@ function isInDiff(issue: CoverityIssueOccurrence, diffMap: DiffMap): boolean {
 
 function createReviewComment(issue: IPolarisIssueUnified, commentBody: string): NewReviewComment {
   return {
-    path: githubRelativizePath(issue.path),
+    path: issue.path,
     body: commentBody,
     line: issue.line,
     side: 'RIGHT'
