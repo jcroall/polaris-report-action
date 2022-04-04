@@ -35,7 +35,7 @@ inputs:
   generate-sarif:
     description: 'Generate SARIF output'
     required: false
-  security-gate-filyers:
+  security-gate-filters:
     description: 'Enable security gate'
     required: false
   skip-run:
