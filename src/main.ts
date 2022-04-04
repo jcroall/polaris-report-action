@@ -366,7 +366,7 @@ async function run(): Promise<void> {
 
       if (!security_gate_pass) {
         logger.error(`Security gate failure, setting status check to failure`)
-        polarisPolicyCheck.passCheck('Issues found that violate your security gate filters', '')
+        polarisPolicyCheck.failCheck('Issues found that violate your security gate filters', '')
       } else {
         polarisPolicyCheck.passCheck('No issues violated your security gate filters', '')
       }
