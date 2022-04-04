@@ -21,7 +21,7 @@ import {
   githubUpdateExistingReviewComment,
   coverityMapMatchingMergeKeys,
   relatavize_path,
-  logger
+  logger, isIssueAllowed, readSecurityGateFiltersFromString
 } from '@jcroall/synopsys-sig-node/lib'
 import {CoverityIssuesView} from '@jcroall/synopsys-sig-node/lib/models/coverity-json-v7-schema'
 import {NewReviewComment, PullRequest} from '@jcroall/synopsys-sig-node/lib/_namespaces/github'
@@ -56,23 +56,6 @@ import {IPolarisIssueUnified} from "@jcroall/synopsys-sig-node/lib/polaris/model
 import {context} from "@actions/github";
 import * as core from '@actions/core'
 import {Octokit} from "@octokit/rest";
-
-function readSecurityGateFiltersFromString(securityGateString: string): Map<string, string[]> {
-  const securityGateJson = JSON.parse(securityGateString)
-  let securityGateMap = new Map<string, string[]>()
-
-  logger.debug(`Reading security gate filters`)
-
-  for (const key in securityGateJson) {
-    if(Object.hasOwnProperty(key)) {
-      logger.debug(`  ${key} : ${securityGateJson[key]}`)
-    }
-  }
-
-  process.exit(1)
-
-  return(securityGateMap)
-}
 
 export async function githubGetChangesForPR(github_token: string): Promise<Array<string>> {
   let changed_files: string[] = []
@@ -118,51 +101,7 @@ export async function githubGetChangesForPR(github_token: string): Promise<Array
 
   return (changed_files)
 }
-/*
-const github = require('@actions/github');
-const core   = require('@actions/core');
 
-const context = github.context;
-const repo    = context.payload.repository;
-const owner   = repo.owner;
-
-const gh   = github.getOctokit(GITHUB_TOKEN);
-const args = { owner: owner.name || owner.login, repo: repo.name, ref: undefined };
-
-export async function githubGetChangesForMR(github_token: string): Promise<Array<string>> {
-  let changed_files: string[] = []
-
-  if (githubIsPullRequest()) {
-    logger.debug(`GitHub Get Changed Files - operating on a pull request`)
-
-    const pull = context.payload.pull_request as PullRequest
-    if (pull?.number) {
-      const url = context.payload.pull_request.commits_url;
-      let commits = await gh.paginate(`GET ${url}`, args);
-      logger.debug(`Get commits from ${url}: ${commits}`)
-      for (const commit of commits) {
-        logger.debug(`  commit=${commit.id} or ${commit.sha}`)
-        args.ref = commit.id || commit.sha
-        let commit_data = gh.repos.getCommit(args)
-        logger.debug(`Found file in PR: ${commit_data.file.filename}`)
-        changed_files.push(commit_data.file.filename)
-      }
-    }
-  } else {
-    logger.debug(`GitHub Get Changed Files - operating on a push`)
-    let commits = context.payload.commits
-    for (const commit of commits) {
-      args.ref = commit.id || commit.sha
-      let commit_data = gh.repos.getCommit(args)
-      logger.debug(`Found file in push: ${commit_data.file.filename}`)
-      changed_files.push(commit_data.file.filename)
-    }
-  }
-
-  return(changed_files)
-}
-
- */
 async function run(): Promise<void> {
   logger.info('Starting Coverity GitHub Action')
 
@@ -173,7 +112,16 @@ async function run(): Promise<void> {
 
   logger.info(`Connecting to Polaris service at: ${POLARIS_URL}`)
 
-  readSecurityGateFiltersFromString(SECURITY_GATE_FILTERS)
+  let securityGateFilters = undefined
+  if (process.env.SECURITY_GATE_FILTER) {
+    try {
+      securityGateFilters = readSecurityGateFiltersFromString(process.env.SECURITY_GATE_FILTER)
+    } catch (error) {
+      logger.error(`Unable to parse security gate filters: ${error}`)
+      process.exit(2)
+    }
+  }
+  logger.debug(`Security gate filter: ${securityGateFilters}`)
 
   const task_input: PolarisTaskInputs = new PolarisInputReader().getPolarisInputs(POLARIS_URL, POLARIS_ACCESS_TOKEN,
       POLARIS_PROXY_URL ? POLARIS_PROXY_URL : "",
@@ -326,80 +274,91 @@ async function run(): Promise<void> {
 
   // TODO If SARIF
 
-  if (!githubIsPullRequest()) {
-    logger.info('Not a Pull Request. Nothing to do...')
-    return Promise.resolve()
-  }
+  if (githubIsPullRequest()) {
+    const newReviewComments = []
+    const actionReviewComments = await githubGetExistingReviewComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body.includes(POLARIS_COMMENT_PREFACE)))
+    const actionIssueComments = await githubGetExistingIssueComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body?.includes(POLARIS_COMMENT_PREFACE)))
+    const diffMap = await githubGetPullRequestDiff(GITHUB_TOKEN).then(githubGetDiffMap)
 
+    for (const issue of issuesUnified) {
+      logger.info(`Found Polaris Issue ${issue.key} at ${issue.path}:${issue.line}`)
 
+      let ignoredOnServer = issue.dismissed
 
-  const newReviewComments = []
-  const actionReviewComments = await githubGetExistingReviewComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body.includes(POLARIS_COMMENT_PREFACE)))
-  const actionIssueComments = await githubGetExistingIssueComments(GITHUB_TOKEN).then(comments => comments.filter(comment => comment.body?.includes(POLARIS_COMMENT_PREFACE)))
-  const diffMap = await githubGetPullRequestDiff(GITHUB_TOKEN).then(githubGetDiffMap)
+      const reviewCommentBody = polarisCreateReviewCommentMessage(issue)
+      const issueCommentBody = polarisCreateReviewCommentMessage(issue)
 
-  for (const issue of issuesUnified) {
-    logger.info(`Found Polaris Issue ${issue.key} at ${issue.path}:${issue.line}`)
-
-    let ignoredOnServer = issue.dismissed
-
-    const reviewCommentBody = polarisCreateReviewCommentMessage(issue)
-    const issueCommentBody = polarisCreateReviewCommentMessage(issue)
-
-    const reviewCommentIndex = actionReviewComments.findIndex(comment => comment.line === issue.line &&
-        comment.body.includes(issue.key))
-    let existingMatchingReviewComment = undefined
-    if (reviewCommentIndex !== -1) {
-      existingMatchingReviewComment = actionReviewComments.splice(reviewCommentIndex, 1)[0]
-    }
-
-    const issueCommentIndex = actionIssueComments.findIndex(comment => comment.body?.includes(issue.key))
-    let existingMatchingIssueComment = undefined
-    if (issueCommentIndex !== -1) {
-      existingMatchingIssueComment = actionIssueComments.splice(issueCommentIndex, 1)[0]
-    }
-
-    if (existingMatchingReviewComment !== undefined) {
-      logger.info(`Issue already reported in comment ${existingMatchingReviewComment.id}, updating if necessary...`)
-      if (existingMatchingReviewComment.body !== reviewCommentBody) {
-        githubUpdateExistingReviewComment(GITHUB_TOKEN, existingMatchingReviewComment.id, reviewCommentBody)
+      const reviewCommentIndex = actionReviewComments.findIndex(comment => comment.line === issue.line &&
+          comment.body.includes(issue.key))
+      let existingMatchingReviewComment = undefined
+      if (reviewCommentIndex !== -1) {
+        existingMatchingReviewComment = actionReviewComments.splice(reviewCommentIndex, 1)[0]
       }
-    } else if (existingMatchingIssueComment !== undefined) {
-      logger.info(`Issue already reported in comment ${existingMatchingIssueComment.id}, updating if necessary...`)
-      if (existingMatchingIssueComment.body !== issueCommentBody) {
-        githubUpdateExistingIssueComment(GITHUB_TOKEN, existingMatchingIssueComment.id, issueCommentBody)
+
+      const issueCommentIndex = actionIssueComments.findIndex(comment => comment.body?.includes(issue.key))
+      let existingMatchingIssueComment = undefined
+      if (issueCommentIndex !== -1) {
+        existingMatchingIssueComment = actionIssueComments.splice(issueCommentIndex, 1)[0]
       }
-    } else if (ignoredOnServer) {
-      logger.info('Issue ignored on server, no comment needed.')
-    } else if (polarisIsInDiff(issue, diffMap)) {
-      logger.info('Issue not reported, adding a comment to the review.')
-      newReviewComments.push(createReviewComment(issue, reviewCommentBody))
-    } else {
-      logger.info('Issue not reported, adding an issue comment.')
-      githubCreateIssueComment(GITHUB_TOKEN, issueCommentBody)
-    }
-  }
 
-  for (const comment of actionReviewComments) {
-    if (coverityIsPresent(comment.body)) {
-      info(`Comment ${comment.id} represents a Coverity issue which is no longer present, updating comment to reflect resolution.`)
-      githubUpdateExistingReviewComment(GITHUB_TOKEN, comment.id, coverityCreateNoLongerPresentMessage(comment.body))
+      if (existingMatchingReviewComment !== undefined) {
+        logger.info(`Issue already reported in comment ${existingMatchingReviewComment.id}, updating if necessary...`)
+        if (existingMatchingReviewComment.body !== reviewCommentBody) {
+          githubUpdateExistingReviewComment(GITHUB_TOKEN, existingMatchingReviewComment.id, reviewCommentBody)
+        }
+      } else if (existingMatchingIssueComment !== undefined) {
+        logger.info(`Issue already reported in comment ${existingMatchingIssueComment.id}, updating if necessary...`)
+        if (existingMatchingIssueComment.body !== issueCommentBody) {
+          githubUpdateExistingIssueComment(GITHUB_TOKEN, existingMatchingIssueComment.id, issueCommentBody)
+        }
+      } else if (ignoredOnServer) {
+        logger.info('Issue ignored on server, no comment needed.')
+      } else if (polarisIsInDiff(issue, diffMap)) {
+        logger.info('Issue not reported, adding a comment to the review.')
+        newReviewComments.push(createReviewComment(issue, reviewCommentBody))
+      } else {
+        logger.info('Issue not reported, adding an issue comment.')
+        githubCreateIssueComment(GITHUB_TOKEN, issueCommentBody)
+      }
     }
-  }
 
-  for (const comment of actionIssueComments) {
-    if (comment.body !== undefined && coverityIsPresent(comment.body)) {
-      info(`Comment ${comment.id} represents a Coverity issue which is no longer present, updating comment to reflect resolution.`)
-      githubUpdateExistingReviewComment(GITHUB_TOKEN, comment.id, coverityCreateNoLongerPresentMessage(comment.body))
+    for (const comment of actionReviewComments) {
+      if (coverityIsPresent(comment.body)) {
+        info(`Comment ${comment.id} represents a Coverity issue which is no longer present, updating comment to reflect resolution.`)
+        githubUpdateExistingReviewComment(GITHUB_TOKEN, comment.id, coverityCreateNoLongerPresentMessage(comment.body))
+      }
     }
-  }
 
-  if (newReviewComments.length > 0) {
-    info('Publishing review...')
-    githubCreateReview(GITHUB_TOKEN, newReviewComments)
+    for (const comment of actionIssueComments) {
+      if (comment.body !== undefined && coverityIsPresent(comment.body)) {
+        info(`Comment ${comment.id} represents a Coverity issue which is no longer present, updating comment to reflect resolution.`)
+        githubUpdateExistingReviewComment(GITHUB_TOKEN, comment.id, coverityCreateNoLongerPresentMessage(comment.body))
+      }
+    }
+
+    if (newReviewComments.length > 0) {
+      info('Publishing review...')
+      githubCreateReview(GITHUB_TOKEN, newReviewComments)
+    }
   }
 
   info(`Found ${issuesUnified.length} Reported Polaris issues.`)
+
+  let security_gate_pass = true
+  if (securityGateFilters) {
+    logger.debug(`Checking security gate...`)
+    for (const issue of issuesUnified) {
+      if (!isIssueAllowed(securityGateFilters, issue.severity, issue.cwe, githubIsPullRequest() ? true : false)) {
+        logger.debug(`Issue ${issue.key} does not pass security gate filters`)
+        security_gate_pass = false
+        break
+      }
+    }
+
+    if (!security_gate_pass) {
+      logger.error(`Security gate failure, setting status check to failure`)
+    }
+  }
 
 }
 
