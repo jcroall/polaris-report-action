@@ -59,7 +59,7 @@ import {Octokit} from "@octokit/rest";
 import {CHECK_NAME} from "./application-constants";
 
 export async function githubGetChangesForPR(github_token: string): Promise<Array<string>> {
-  let changed_files: string[] = []
+  let changed_files = new Array()
 
   const octokit = new Octokit({ auth: github_token })
 
