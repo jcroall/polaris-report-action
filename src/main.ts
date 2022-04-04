@@ -271,22 +271,26 @@ async function run(): Promise<void> {
   }
 
   let branches = await polarisGetBranches(polaris_service, project_id)
-  let merge_target_branch = process.env["CI_MERGE_REQUEST_TARGET_BRANCH_NAME"]
 
   let issuesUnified = undefined
 
   if (githubIsPullRequest()) {
+    let merge_target_branch = process.env["GITHUB_BASE_REF"]
+    if (!merge_target_branch) {
+      logger.error(`Running on a pull request and cannot find GitHub environment variable GITHUB_BASE_REF`)
+      process.exit(2)
+    }
     let branches = await polarisGetBranches(polaris_service, project_id)
     let branch_id_compare = undefined
     for (const branch of branches) {
       if (branch.attributes.name == merge_target_branch) {
-        logger.debug(`Running on merge request, and target branch is '${merge_target_branch}' which has Polaris ID ${branch.id}`)
+        logger.debug(`Running on pull request, and target branch is '${merge_target_branch}' which has Polaris ID ${branch.id}`)
         branch_id_compare = branch.id
       }
     }
 
     if (!branch_id_compare) {
-      logger.error(`Running on merge request and unable to find previous Polaris analysis for merge target: ${merge_target_branch}, will fall back to full results`)
+      logger.error(`Running on pull request and unable to find previous Polaris analysis for merge target: ${merge_target_branch}, will fall back to full results`)
     } else {
       issuesUnified = await polarisGetIssuesUnified(polaris_service, project_id, branch_id,
           true, runs[0].id, false, branch_id_compare, "", "opened")
@@ -294,7 +298,7 @@ async function run(): Promise<void> {
   }
 
   if (!issuesUnified) {
-    logger.debug(`No merge request or merge comparison available, fetching full results`)
+    logger.debug(`No pull request or merge comparison available, fetching full results`)
     issuesUnified = await polarisGetIssuesUnified(polaris_service, project_id, branch_id,
         true, runs[0].id, false, "", "", "")
   }
