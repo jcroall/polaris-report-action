@@ -234,7 +234,10 @@ async function run(): Promise<void> {
       const resultsGlobber = require('fast-glob');
       const resultsJson = await resultsGlobber([`.synopsys/polaris/data/coverity/*/idir/incremental-results/new-issues.json`]);
       logger.debug(`Incremental results in ${resultsJson[0]}`)
-      process.exit(1)
+
+      // TODO validate file exists and is .json?
+      const jsonV7Content = fs.readFileSync(resultsJson[0])
+      const coverityIssues = JSON.parse(jsonV7Content.toString()) as CoverityIssuesView
     }
 
     var scan_json_text = fs.readFileSync(polaris_run_result.scan_cli_json_path);
@@ -361,7 +364,7 @@ async function run(): Promise<void> {
       }
     }
 
-    info(`Found ${issuesUnified.length} Reported Polaris issues.`)
+    logger.info(`Found ${issuesUnified.length} Reported Polaris issues.`)
 
     let security_gate_pass = true
     if (securityGateFilters) {
@@ -373,14 +376,15 @@ async function run(): Promise<void> {
           break
         }
       }
-
-      if (!security_gate_pass) {
-        logger.error(`Security gate failure, setting status check to failure`)
-        polarisPolicyCheck.failCheck('Issues found that violate your security gate filters', '')
-      } else {
-        polarisPolicyCheck.passCheck('No issues violated your security gate filters', '')
-      }
     }
+
+    if (!security_gate_pass) {
+      logger.error(`Security gate failure, setting status check to failure`)
+      polarisPolicyCheck.failCheck('Issues found that violate your security gate filters', '')
+    } else {
+      polarisPolicyCheck.passCheck('No issues violated your security gate filters', '')
+    }
+
   } catch (unhandledError) {
     logger.debug('Canceling policy check because of an unhandled error.')
     polarisPolicyCheck.cancelCheck()
