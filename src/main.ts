@@ -301,6 +301,8 @@ async function run(): Promise<void> {
             issueUnified.link = "N/A" // TODO: Fix this up
 
             issuesUnified.push(issueUnified)
+
+            break
           }
         }
       }
