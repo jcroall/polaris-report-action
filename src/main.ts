@@ -58,6 +58,12 @@ import * as core from '@actions/core'
 import {Octokit} from "@octokit/rest";
 import {CHECK_NAME} from "./application-constants";
 
+interface IPolarisNewResult {
+  "mergeKey": string,
+  "type": string,
+  "location": string
+}
+
 export async function githubGetChangesForPR(github_token: string): Promise<Array<string>> {
   let changed_files = new Array()
 
@@ -234,8 +240,14 @@ async function run(): Promise<void> {
 
     if (isIncremental) {
       const resultsGlobber = require('fast-glob');
-      const resultsJson = await resultsGlobber([`.synopsys/polaris/data/coverity/*/idir/incremental-results/new-issues.json`]);
+
+      const resultsJson = await resultsGlobber([`.synopsys/polaris/data/coverity/*/idir/incremental-results/incremental-results.json`]);
       logger.debug(`Incremental results in ${resultsJson[0]}`)
+
+      const newResultsJson = await resultsGlobber([`.synopsys/polaris/data/coverity/*/idir/incremental-results/new-issues.json`]);
+      logger.debug(`New results in ${newResultsJson[0]}`)
+      const newResultsContent = fs.readFileSync(newResultsJson)
+      const newResults = JSON.parse(newResultsContent.toString()) as IPolarisNewResult[]
 
       // TODO validate file exists and is .json?
       const jsonV7Content = fs.readFileSync(resultsJson[0])
@@ -243,51 +255,55 @@ async function run(): Promise<void> {
 
       issuesUnified = new Array()
       for (const issue of coverityIssues.issues) {
-        let issueUnified = <IPolarisIssueUnified>{}
-        issueUnified.key = issue.mergeKey
-        issueUnified.name = issue.subcategory
-        if (issue.checkerProperties?.subcategoryLongDescription) {
-          issueUnified.description = issue.checkerProperties?.subcategoryLongDescription
-        } else {
-          issueUnified.description = issue.subcategory
-        }
-        if (issue.checkerProperties?.subcategoryLocalEffect) {
-          issueUnified.localEffect = issue.checkerProperties?.subcategoryLocalEffect
-        } else {
-          issueUnified.localEffect = "(Local effect not available)"
-        }
-        issueUnified.checkerName = issue.checkerName
-        issueUnified.path = issue.strippedMainEventFilePathname
-        issueUnified.line = issue.mainEventLineNumber
-        if (issue.checkerProperties?.impact) {
-          issueUnified.severity = issue.checkerProperties?.impact
-        } else {
-          issueUnified.severity = "(Unknown impact)"
-        }
-        if (issue.checkerProperties?.cweCategory) {
-          issueUnified.cwe = issue.checkerProperties?.cweCategory
-        } else {
-          issueUnified.cwe = "(No CWE)"
-        }
-        issueUnified.mainEvent = ""
-        issueUnified.mainEventDescription = "(Main event description not available)"
-        issueUnified.remediationEvent = ""
-        issueUnified.remediationEventDescription = ""
-        for (const event of issue.events) {
-          if (event.main) {
-            issueUnified.mainEvent = event.eventTag
-            issueUnified.mainEventDescription = event.eventDescription
-          }
-          if (event.eventTag == "remediation") {
-            issueUnified.remediationEvent = event.eventTag
-            issueUnified.remediationEventDescription = event.eventDescription
-          }
-        }
-        issueUnified.dismissed = false
-        issueUnified.events = []
-        issueUnified.link = "N/A" // TODO: Fix this up
+        for (const newResult of newResults) {
+          if (issue.mergeKey == newResult.mergeKey) {
+            let issueUnified = <IPolarisIssueUnified>{}
+            issueUnified.key = issue.mergeKey
+            issueUnified.name = issue.subcategory
+            if (issue.checkerProperties?.subcategoryLongDescription) {
+              issueUnified.description = issue.checkerProperties?.subcategoryLongDescription
+            } else {
+              issueUnified.description = issue.subcategory
+            }
+            if (issue.checkerProperties?.subcategoryLocalEffect) {
+              issueUnified.localEffect = issue.checkerProperties?.subcategoryLocalEffect
+            } else {
+              issueUnified.localEffect = "(Local effect not available)"
+            }
+            issueUnified.checkerName = issue.checkerName
+            issueUnified.path = issue.strippedMainEventFilePathname
+            issueUnified.line = issue.mainEventLineNumber
+            if (issue.checkerProperties?.impact) {
+              issueUnified.severity = issue.checkerProperties?.impact
+            } else {
+              issueUnified.severity = "(Unknown impact)"
+            }
+            if (issue.checkerProperties?.cweCategory) {
+              issueUnified.cwe = issue.checkerProperties?.cweCategory
+            } else {
+              issueUnified.cwe = "(No CWE)"
+            }
+            issueUnified.mainEvent = ""
+            issueUnified.mainEventDescription = "(Main event description not available)"
+            issueUnified.remediationEvent = ""
+            issueUnified.remediationEventDescription = ""
+            for (const event of issue.events) {
+              if (event.main) {
+                issueUnified.mainEvent = event.eventTag
+                issueUnified.mainEventDescription = event.eventDescription
+              }
+              if (event.eventTag == "remediation") {
+                issueUnified.remediationEvent = event.eventTag
+                issueUnified.remediationEventDescription = event.eventDescription
+              }
+            }
+            issueUnified.dismissed = false
+            issueUnified.events = []
+            issueUnified.link = "N/A" // TODO: Fix this up
 
-        issuesUnified.push(issueUnified)
+            issuesUnified.push(issueUnified)
+          }
+        }
       }
     } else {
       var scan_json_text = fs.readFileSync(polaris_run_result.scan_cli_json_path);
