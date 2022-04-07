@@ -230,6 +230,8 @@ async function run(): Promise<void> {
       process.exit(2)
     }
 
+    let issuesUnified = undefined
+
     if (isIncremental) {
       const resultsGlobber = require('fast-glob');
       const resultsJson = await resultsGlobber([`.synopsys/polaris/data/coverity/*/idir/incremental-results/new-issues.json`]);
@@ -238,59 +240,108 @@ async function run(): Promise<void> {
       // TODO validate file exists and is .json?
       const jsonV7Content = fs.readFileSync(resultsJson[0])
       const coverityIssues = JSON.parse(jsonV7Content.toString()) as CoverityIssuesView
-    }
 
-    var scan_json_text = fs.readFileSync(polaris_run_result.scan_cli_json_path);
-    var scan_json = JSON.parse(scan_json_text.toString());
+      issuesUnified = new Array()
+      for (const issue of coverityIssues.issues) {
+        let issueUnified = <IPolarisIssueUnified>{}
+        issueUnified.key = issue.mergeKey
+        issueUnified.name = issue.subcategory
+        if (issue.checkerProperties?.subcategoryLongDescription) {
+          issueUnified.description = issue.checkerProperties?.subcategoryLongDescription
+        } else {
+          issueUnified.description = issue.subcategory
+        }
+        if (issue.checkerProperties?.subcategoryLocalEffect) {
+          issueUnified.localEffect = issue.checkerProperties?.subcategoryLocalEffect
+        } else {
+          issueUnified.localEffect = "(Local effect not available)"
+        }
+        issueUnified.checkerName = issue.checkerName
+        issueUnified.path = issue.strippedMainEventFilePathname
+        issueUnified.line = issue.mainEventLineNumber
+        if (issue.checkerProperties?.impact) {
+          issueUnified.severity = issue.checkerProperties?.impact
+        } else {
+          issueUnified.severity = "(Unknown impact)"
+        }
+        if (issue.checkerProperties?.cweCategory) {
+          issueUnified.cwe = issue.checkerProperties?.cweCategory
+        } else {
+          issueUnified.cwe = "(No CWE)"
+        }
+        issueUnified.mainEvent = ""
+        issueUnified.mainEventDescription = "(Main event description not available)"
+        issueUnified.remediationEvent = ""
+        issueUnified.remediationEventDescription = ""
+        for (const event of issue.events) {
+          if (event.main) {
+            issueUnified.mainEvent = event.eventTag
+            issueUnified.mainEventDescription = event.eventDescription
+          }
+          if (event.eventTag == "remediation") {
+            issueUnified.remediationEvent = event.eventTag
+            issueUnified.remediationEventDescription = event.eventDescription
+          }
+        }
+        issueUnified.dismissed = false
+        issueUnified.events = []
+        issueUnified.link = "N/A" // TODO: Fix this up
 
-    const json_path = require('jsonpath');
-    var project_id = json_path.query(scan_json, "$.projectInfo.projectId")
-    var branch_id = json_path.query(scan_json, "$.projectInfo.branchId")
-    var revision_id = json_path.query(scan_json, "$.projectInfo.revisionId")
-
-    logger.debug(`Connect to Polaris: ${polaris_service.polaris_url} and fetch issues for project: ${project_id} and branch: ${branch_id}`)
-
-    let runs = await polarisGetRuns(polaris_service, project_id, branch_id)
-
-    if (runs.length > 1) {
-      logger.debug(`Most recent run is: ${runs[0].id} was created on ${runs[0].attributes["creation-date"]}`)
-      logger.debug(`Last run is: ${runs[1].id} was created on ${runs[1].attributes["creation-date"]}`)
-      logger.debug(`...`)
-    }
-
-    let branches = await polarisGetBranches(polaris_service, project_id)
-
-    let issuesUnified = undefined
-
-    if (githubIsPullRequest()) {
-      let merge_target_branch = process.env["GITHUB_BASE_REF"]
-      if (!merge_target_branch) {
-        logger.error(`Running on a pull request and cannot find GitHub environment variable GITHUB_BASE_REF`)
-        polarisPolicyCheck.cancelCheck()
-        process.exit(2)
+        issuesUnified.push(issueUnified)
       }
+    } else {
+      var scan_json_text = fs.readFileSync(polaris_run_result.scan_cli_json_path);
+      var scan_json = JSON.parse(scan_json_text.toString());
+
+      const json_path = require('jsonpath');
+      var project_id = json_path.query(scan_json, "$.projectInfo.projectId")
+      var branch_id = json_path.query(scan_json, "$.projectInfo.branchId")
+      var revision_id = json_path.query(scan_json, "$.projectInfo.revisionId")
+
+      logger.debug(`Connect to Polaris: ${polaris_service.polaris_url} and fetch issues for project: ${project_id} and branch: ${branch_id}`)
+
+      let runs = await polarisGetRuns(polaris_service, project_id, branch_id)
+
+      if (runs.length > 1) {
+        logger.debug(`Most recent run is: ${runs[0].id} was created on ${runs[0].attributes["creation-date"]}`)
+        logger.debug(`Last run is: ${runs[1].id} was created on ${runs[1].attributes["creation-date"]}`)
+        logger.debug(`...`)
+      }
+
       let branches = await polarisGetBranches(polaris_service, project_id)
-      let branch_id_compare = undefined
-      for (const branch of branches) {
-        if (branch.attributes.name == merge_target_branch) {
-          logger.debug(`Running on pull request, and target branch is '${merge_target_branch}' which has Polaris ID ${branch.id}`)
-          branch_id_compare = branch.id
+
+      if (githubIsPullRequest()) {
+        let merge_target_branch = process.env["GITHUB_BASE_REF"]
+        if (!merge_target_branch) {
+          logger.error(`Running on a pull request and cannot find GitHub environment variable GITHUB_BASE_REF`)
+          polarisPolicyCheck.cancelCheck()
+          process.exit(2)
+        }
+        let branches = await polarisGetBranches(polaris_service, project_id)
+        let branch_id_compare = undefined
+        for (const branch of branches) {
+          if (branch.attributes.name == merge_target_branch) {
+            logger.debug(`Running on pull request, and target branch is '${merge_target_branch}' which has Polaris ID ${branch.id}`)
+            branch_id_compare = branch.id
+          }
+        }
+
+        if (!branch_id_compare) {
+          logger.error(`Running on pull request and unable to find previous Polaris analysis for merge target: ${merge_target_branch}, will fall back to full results`)
+        } else {
+          issuesUnified = await polarisGetIssuesUnified(polaris_service, project_id, branch_id,
+              true, runs[0].id, false, branch_id_compare, "", "opened")
         }
       }
 
-      if (!branch_id_compare) {
-        logger.error(`Running on pull request and unable to find previous Polaris analysis for merge target: ${merge_target_branch}, will fall back to full results`)
-      } else {
+      if (!issuesUnified) {
+        logger.debug(`No pull request or merge comparison available, fetching full results`)
         issuesUnified = await polarisGetIssuesUnified(polaris_service, project_id, branch_id,
-            true, runs[0].id, false, branch_id_compare, "", "opened")
+            true, runs[0].id, false, "", "", "")
       }
     }
 
-    if (!issuesUnified) {
-      logger.debug(`No pull request or merge comparison available, fetching full results`)
-      issuesUnified = await polarisGetIssuesUnified(polaris_service, project_id, branch_id,
-          true, runs[0].id, false, "", "", "")
-    }
+
 
     logger.info("Executed Polaris Software Integrity Platform: " + polaris_run_result.return_code);
 
