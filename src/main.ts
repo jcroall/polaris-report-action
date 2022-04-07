@@ -248,16 +248,16 @@ async function run(): Promise<void> {
       logger.debug(`New results in ${newResultsJson[0]}`)
       logger.debug(`Read file...`)
       const newResultsContent = await fs.readFileSync(newResultsJson[0])
-      logger(`a`)
+      logger.debug(`a`)
       const newResults = JSON.parse(newResultsContent.toString()) as IPolarisNewResult[]
-      logger(`b`)
+      logger.debug(`b`)
 
 
       // TODO validate file exists and is .json?
       const jsonV7Content = await fs.readFileSync(resultsJson[0])
-      logger(`c`)
+      logger.debug(`c`)
       const coverityIssues = JSON.parse(jsonV7Content.toString()) as CoverityIssuesView
-      logger(`d`)
+      logger.debug(`d`)
 
 
       issuesUnified = new Array()
