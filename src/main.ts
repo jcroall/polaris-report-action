@@ -122,6 +122,9 @@ async function run(): Promise<void> {
 
     logger.info(`Connecting to Polaris service at: ${POLARIS_URL}`)
 
+    var timerDate = new Date(1574460000000);
+    logger.debug(`Date=${timerDate}`)
+
     let securityGateFilters = undefined
     if (SECURITY_GATE_FILTERS) {
       try {
