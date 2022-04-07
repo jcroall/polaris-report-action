@@ -245,25 +245,16 @@ async function run(): Promise<void> {
       logger.debug(`Incremental results in ${resultsJson[0]}`)
 
       const newResultsJson = await resultsGlobber([`.synopsys/polaris/data/coverity/*/idir/incremental-results/new-issues.json`]);
-      logger.debug(`New results in ${newResultsJson[0]}`)
-      logger.debug(`Read file...`)
       const newResultsContent = await fs.readFileSync(newResultsJson[0])
-      logger.debug(`a`)
       const newResults = JSON.parse(newResultsContent.toString()) as IPolarisNewResult[]
-      logger.debug(`b`)
-
 
       // TODO validate file exists and is .json?
       const jsonV7Content = await fs.readFileSync(resultsJson[0])
-      logger.debug(`c`)
       const coverityIssues = JSON.parse(jsonV7Content.toString()) as CoverityIssuesView
-      logger.debug(`d`)
-
 
       issuesUnified = new Array()
       for (const issue of coverityIssues.issues) {
         for (const newResult of newResults) {
-          logger.debug(`1`)
           if (issue.mergeKey == newResult.mergeKey) {
             let issueUnified = <IPolarisIssueUnified>{}
             issueUnified.key = issue.mergeKey
@@ -278,14 +269,8 @@ async function run(): Promise<void> {
             } else {
               issueUnified.localEffect = "(Local effect not available)"
             }
-            logger.debug(`2`)
-
             issueUnified.checkerName = issue.checkerName
-            logger.debug(`3`)
-
             issueUnified.path = issue.strippedMainEventFilePathname
-            logger.debug(`4`)
-
             issueUnified.line = issue.mainEventLineNumber
             if (issue.checkerProperties?.impact) {
               issueUnified.severity = issue.checkerProperties?.impact
