@@ -256,6 +256,7 @@ async function run(): Promise<void> {
       issuesUnified = new Array()
       for (const issue of coverityIssues.issues) {
         for (const newResult of newResults) {
+          logger.debug(`1`)
           if (issue.mergeKey == newResult.mergeKey) {
             let issueUnified = <IPolarisIssueUnified>{}
             issueUnified.key = issue.mergeKey
@@ -270,8 +271,14 @@ async function run(): Promise<void> {
             } else {
               issueUnified.localEffect = "(Local effect not available)"
             }
+            logger.debug(`2`)
+
             issueUnified.checkerName = issue.checkerName
+            logger.debug(`3`)
+
             issueUnified.path = issue.strippedMainEventFilePathname
+            logger.debug(`4`)
+
             issueUnified.line = issue.mainEventLineNumber
             if (issue.checkerProperties?.impact) {
               issueUnified.severity = issue.checkerProperties?.impact
