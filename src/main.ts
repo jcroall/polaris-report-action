@@ -247,7 +247,7 @@ async function run(): Promise<void> {
       const newResultsJson = await resultsGlobber([`.synopsys/polaris/data/coverity/*/idir/incremental-results/new-issues.json`]);
       logger.debug(`New results in ${newResultsJson[0]}`)
       logger.debug(`Read file...`)
-      const newResultsContent = await fs.readFileSync(newResultsJson)
+      const newResultsContent = await fs.readFileSync(newResultsJson[0])
       logger(`a`)
       const newResults = JSON.parse(newResultsContent.toString()) as IPolarisNewResult[]
       logger(`b`)
