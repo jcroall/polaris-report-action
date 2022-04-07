@@ -421,6 +421,7 @@ async function run(): Promise<void> {
     if (securityGateFilters) {
       logger.debug(`Checking security gate...`)
       for (const issue of issuesUnified) {
+        logger.debug(`Test issue ${issue.key} severity: ${issue.severity} cwe: ${issue.cwe}`)
         if (!isIssueAllowed(securityGateFilters, issue.severity, issue.cwe, githubIsPullRequest() ? true : false)) {
           logger.debug(`Issue ${issue.key} does not pass security gate filters`)
           security_gate_pass = false
