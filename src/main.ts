@@ -128,11 +128,13 @@ async function run(): Promise<void> {
     }
     logger.debug(`Security gate filter: ${securityGateFilters}`)
 
+    let isIncremental = POLARIS_COMMAND.includes("--incremental")
+
     const task_input: PolarisTaskInputs = new PolarisInputReader().getPolarisInputs(POLARIS_URL, POLARIS_ACCESS_TOKEN,
         POLARIS_PROXY_URL ? POLARIS_PROXY_URL : "",
         POLARIS_PROXY_USERNAME ? POLARIS_PROXY_USERNAME : "",
         POLARIS_PROXY_PASSWORD ? POLARIS_PROXY_PASSWORD : "",
-        POLARIS_COMMAND, true, true, false)
+        POLARIS_COMMAND, !isIncremental, isIncremental, false)
     const connection: PolarisConnection = task_input.polaris_connection;
 
     var polaris_install_path: string | undefined;
@@ -148,6 +150,7 @@ async function run(): Promise<void> {
     await polaris_service.authenticate();
     logger.debug("Authenticated with polaris.");
 
+    // In the future it would be nice to supoprt phone home for stats
     try {
       logger.debug("Fetching organization name and task version.");
       const org_name = await polaris_service.fetch_organization_name();
@@ -225,6 +228,13 @@ async function run(): Promise<void> {
       logger.error(`Unable to find Polaris run results.`)
       polarisPolicyCheck.cancelCheck()
       process.exit(2)
+    }
+
+    if (isIncremental) {
+      const resultsGlobber = require('fast-glob');
+      const resultsJson = await resultsGlobber([`.synopsys/polaris/data/coverity/*/idir/incremental-results/new-issues.json`]);
+      logger.debug(`Incremental results in ${resultsJson[0]}`)
+      process.exit(1)
     }
 
     var scan_json_text = fs.readFileSync(polaris_run_result.scan_cli_json_path);
